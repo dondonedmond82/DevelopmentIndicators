@@ -1,13 +1,22 @@
+import io
 import os
-import pandas as pd
 import numpy as np
+import pandas as pd
 import panel as pn
 import plotly.express as px
 import plotly.graph_objects as go
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import mean_squared_error, r2_score
 from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics import mean_squared_error, r2_score
+from sklearn.model_selection import train_test_split
+
+# ReportLab imports for generating side-by-side Graph + Text PDF report
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import letter
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.lib.units import inch
+from reportlab.platypus import Image as RLImage
+from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 # Initialize Panel extension with Plotly support
 pn.extension('plotly', 'tabulator', sizing_mode="stretch_width")
@@ -19,13 +28,13 @@ pn.extension('plotly', 'tabulator', sizing_mode="stretch_width")
 def load_data():
     df_wide = pd.read_csv('wdi_wide.csv')
     df_ts = pd.read_csv('wdi_timeseries.csv')
-    
+
     # Feature engineering for NLP & text analysis
     df_wide['Country_Summary_Text'] = (
-        "Country " + df_wide['Country Name'].fillna('') + 
-        " located in " + df_wide['Region'].fillna('') + 
-        " is classified as " + df_wide['Income Group'].fillna('') + 
-        " income level. GDP per capita: $" + df_wide['GDP_per_capita'].fillna(0).round(2).astype(str) + 
+        "Country " + df_wide['Country Name'].fillna('') +
+        " located in " + df_wide['Region'].fillna('') +
+        " is classified as " + df_wide['Income Group'].fillna('') +
+        " income level. GDP per capita: $" + df_wide['GDP_per_capita'].fillna(0).round(2).astype(str) +
         ", Life expectancy: " + df_wide['Life_expectancy'].fillna(0).round(1).astype(str) + " years."
     )
     return df_wide, df_ts
@@ -33,9 +42,9 @@ def load_data():
 df_wide, df_ts = load_data()
 
 numeric_cols = [
-    'GDP_per_capita', 'Life_expectancy', 'Population', 'CO2_per_capita', 
-    'Unemployment_pct', 'Literacy_pct', 'Health_exp_pct_gdp', 'GDP_growth_pct', 
-    'Urban_pop_pct', 'Internet_users_pct', 'Gini_index', 'Infant_mortality', 
+    'GDP_per_capita', 'Life_expectancy', 'Population', 'CO2_per_capita',
+    'Unemployment_pct', 'Literacy_pct', 'Health_exp_pct_gdp', 'GDP_growth_pct',
+    'Urban_pop_pct', 'Internet_users_pct', 'Gini_index', 'Infant_mortality',
     'Electricity_access_pct', 'Maternal_mortality'
 ]
 
@@ -43,19 +52,19 @@ numeric_cols = [
 # 2. WIDGET CONTROLLERS
 # ---------------------------------------------------------
 region_select = pn.widgets.MultiSelect(
-    name='Select Regions', 
+    name='Select Regions',
     options=list(df_wide['Region'].dropna().unique()),
     value=list(df_wide['Region'].dropna().unique())[:3]
 )
 
-# 1. Dropdown Menu (pn.widgets.Select) for filtering charts by Income Group
+# 1. Dropdown Menu for filtering charts by Income Group
 income_select = pn.widgets.Select(
     name='Filter by Income Group',
     options=['All'] + list(df_wide['Income Group'].dropna().unique()),
     value='All'
 )
 
-# 2. Dropdown Menu (pn.widgets.Select) for choosing indicator in charts
+# 2. Dropdown Menu for choosing indicator in charts
 map_metric_select = pn.widgets.Select(
     name='Map / Chart Indicator Variable',
     options=['Life_expectancy', 'GDP_per_capita', 'CO2_per_capita', 'Internet_users_pct', 'Infant_mortality'],
@@ -130,7 +139,7 @@ def get_bar_chart(regions, income):
     )
     return fig
 
-# 4. Barh Chart: Top N Countries (Controlled by IntSlider & Dropdown)
+# 4. Barh Chart: Top N Countries
 @pn.depends(region_select.param.value, income_select.param.value, top_n_slider.param.value, map_metric_select.param.value)
 def get_barh_chart(regions, income, top_n, metric):
     filtered = filter_dataframe(regions, income).sort_values(metric, ascending=False).head(top_n)
@@ -177,7 +186,7 @@ def get_boxplot(regions, income):
     )
     return fig
 
-# 8. Geospatial Map: World Map Indicator Visualizer (Controlled by Dropdown Menu)
+# 8. Geospatial Map: World Map Indicator Visualizer
 @pn.depends(region_select.param.value, income_select.param.value, map_metric_select.param.value)
 def get_geo_map(regions, income, metric):
     filtered = filter_dataframe(regions, income)
@@ -199,25 +208,24 @@ def run_ml_pipeline(target_col, n_estimators):
     ml_df = df_wide[numeric_cols].dropna()
     X = ml_df.drop(columns=[target_col])
     y = ml_df[target_col]
-    
+
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
     model = RandomForestRegressor(n_estimators=n_estimators, random_state=42)
     model.fit(X_train, y_train)
-    
+
     preds = model.predict(X_test)
     r2 = r2_score(y_test, preds)
     rmse = np.sqrt(mean_squared_error(y_test, preds))
-    
-    # Feature Importance Plot
+
     importance = pd.DataFrame({'Feature': X.columns, 'Importance': model.feature_importances_})
     importance = importance.sort_values('Importance', ascending=True)
-    
+
     fig = px.bar(
         importance, x='Importance', y='Feature', orientation='h',
         title=f"Feature Importances for Predicting {target_col} (n_estimators={n_estimators})",
         color='Importance', color_continuous_scale='Viridis'
     )
-    
+
     metrics_card = pn.Column(
         pn.pane.Markdown(f"### ML Model Results: `{target_col}`"),
         pn.Row(
@@ -246,21 +254,18 @@ nlp_run_btn = pn.widgets.Button(name='Run LLM / RAG Pipeline', button_type='prim
 
 @pn.depends(nlp_country_select.param.value, nlp_run_btn.param.clicks)
 def run_nlp_llm_workflow(country_name, clicks):
-    # 1. TF-IDF Context Retrieval Simulation (RAG)
     tfidf = TfidfVectorizer(stop_words='english')
     tfidf_matrix = tfidf.fit_transform(df_wide['Country_Summary_Text'])
-    
+
     country_row = df_wide[df_wide['Country Name'] == country_name].iloc[0]
     retrieved_context = country_row['Country_Summary_Text']
-    
-    # Top TF-IDF Terms
+
     feature_names = np.array(tfidf.get_feature_names_out())
     doc_idx = country_row.name
     row_weights = tfidf_matrix[doc_idx].toarray().flatten()
     top_indices = row_weights.argsort()[-5:][::-1]
     top_keywords = ", ".join(feature_names[top_indices])
-    
-    # Simulated Structured LLM Output Formulation
+
     simulated_llm_response = (
         f"**[Simulated LLM Agent Response via Context Augmented Prompting]**\n\n"
         f"**Target Entity:** {country_name}\n"
@@ -272,7 +277,7 @@ def run_nlp_llm_workflow(country_name, clicks):
         f"*LLM Recommendation Engine Notice:* Based on context, target intervention should focus on "
         f"{'infrastructure and industrialization' if country_row['GDP_per_capita'] < 5000 else 'sustainable growth and high-tech workforce deployment'}."
     )
-    
+
     return pn.Column(
         pn.pane.Markdown("#### 🔍 1. Retrieved Document Context (Vector DB / RAG)"),
         pn.pane.Alert(retrieved_context, alert_type='info'),
@@ -281,7 +286,110 @@ def run_nlp_llm_workflow(country_name, clicks):
     )
 
 # ---------------------------------------------------------
-# 6. PANEL DASHBOARD LAYOUT
+# 6. DYNAMIC PDF GENERATION ENGINE
+# ---------------------------------------------------------
+def generate_pdf_report():
+    pdf_buffer = io.BytesIO()
+    doc = SimpleDocTemplate(
+        pdf_buffer,
+        pagesize=letter,
+        rightMargin=36,
+        leftMargin=36,
+        topMargin=36,
+        bottomMargin=36
+    )
+
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle(
+        'DocTitle',
+        parent=styles['Heading1'],
+        fontSize=18,
+        leading=22,
+        textColor=colors.HexColor('#1f77b4'),
+        spaceAfter=15
+    )
+    body_style = ParagraphStyle(
+        'BodyText',
+        parent=styles['Normal'],
+        fontSize=9,
+        leading=13,
+        textColor=colors.HexColor('#2c3e50')
+    )
+
+    story = [
+        Paragraph("World Development Indicators Report", title_style),
+        Paragraph(f"<b>Filter Context:</b> Regions: {', '.join(region_select.value)} | Income Group: {income_select.value}", body_style),
+        Spacer(1, 15)
+    ]
+
+    items_to_export = [
+        (
+            get_pie_chart(region_select.value, income_select.value),
+            "<b>Income Group Distribution</b><br/><br/>This pie chart displays the overall ratio of countries categorized by income levels within your active regional selection."
+        ),
+        (
+            get_bar_chart(region_select.value, income_select.value),
+            "<b>Mean GDP per Capita by Region</b><br/><br/>This chart highlights economic disparities across regions, demonstrating average gross domestic product values."
+        ),
+        (
+            get_barh_chart(region_select.value, income_select.value, top_n_slider.value, map_metric_select.value),
+            f"<b>Top {top_n_slider.value} Countries by {map_metric_select.value}</b><br/><br/>Horizontal ranking indicating top performing entities for the selected indicator variable."
+        ),
+        (
+            get_scatter_plot(region_select.value, income_select.value),
+            "<b>GDP per Capita vs. Life Expectancy</b><br/><br/>A log-scale scatter analysis illustrating health outcomes plotted against economic metrics."
+        ),
+        (
+            get_heatmap(region_select.value, income_select.value),
+            "<b>Feature Correlation Matrix</b><br/><br/>Linear correlations between primary macro-economic and social indicators."
+        ),
+        (
+            get_boxplot(region_select.value, income_select.value),
+            "<b>CO2 Emissions per Capita</b><br/><br/>Distribution and outliers of carbon footprints grouped by global income tiers."
+        )
+    ]
+
+    table_data = []
+
+    for fig, text in items_to_export:
+        img_bytes = pio.to_image(fig, format='png', width=450, height=300, scale=2)
+        img_buf = io.BytesIO(img_bytes)
+        img = RLImage(img_buf, width=3.3 * inch, height=2.2 * inch)
+
+        text_p = Paragraph(text, body_style)
+
+        # Place image on left, text on right side
+        table_data.append([img, text_p])
+
+    report_table = Table(table_data, colWidths=[3.5 * inch, 3.5 * inch])
+    report_table.setStyle(TableStyle([
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('LEFTPADDING', (0, 0), (-1, -1), 6),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 6),
+        ('TOPPADDING', (0, 0), (-1, -1), 8),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+        ('LINEBELOW', (0, 0), (-1, -1), 0.5, colors.HexColor('#e0e0e0')),
+    ]))
+
+    story.append(report_table)
+    doc.build(story)
+    pdf_buffer.seek(0)
+    return pdf_buffer
+
+# PDF File Download Widget for Left Sidebar
+pdf_download_button = pn.widgets.FileDownload(
+    callback=generate_pdf_report,
+    filename="WDI_Report.pdf",
+    label="📄 Export Report to PDF",
+    button_type="success",
+    sizing_mode="stretch_width"
+)
+
+# Needed by reportlab export helper to render Plotly figures
+import plotly.io as pio
+
+# ---------------------------------------------------------
+# 7. PANEL DASHBOARD LAYOUT
 # ---------------------------------------------------------
 sidebar = pn.Column(
     "## ⚙️ Controls",
@@ -289,6 +397,9 @@ sidebar = pn.Column(
     income_select,
     map_metric_select,
     top_n_slider,
+    pn.layout.Divider(),
+    "### 📄 Export Options",
+    pdf_download_button,
     pn.layout.Divider(),
     "### 🤖 ML Parameters",
     target_var_select,
