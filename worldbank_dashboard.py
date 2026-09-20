@@ -5,10 +5,19 @@ import pandas as pd
 import panel as pn
 import plotly.express as px
 import plotly.graph_objects as go
+import plotly.io as pio
+
+# Scikit-Learn for ML baseline & NLP feature extraction
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics import mean_squared_error, r2_score
 from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+
+# PyTorch Deep Learning
+import torch
+import torch.nn as nn
+import torch.optim as optim
 
 # ReportLab imports for generating side-by-side Graph + Text PDF report
 from reportlab.lib import colors
@@ -22,12 +31,23 @@ from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, Tabl
 pn.extension('plotly', 'tabulator', sizing_mode="stretch_width")
 
 # ---------------------------------------------------------
-# 1. DATA LOADING & PREPROCESSING
+# 1. DATA LOADING & PREPROCESSING (WITH TYPE FIXES)
 # ---------------------------------------------------------
 @pn.cache
 def load_data():
     df_wide = pd.read_csv('wdi_wide.csv')
     df_ts = pd.read_csv('wdi_timeseries.csv')
+
+    # Fix: Ensure all numeric indicator columns are explicitly converted to float
+    ts_non_numeric = ['Year', 'Country Name', 'Country Code', 'Region', 'Income Group']
+    ts_numeric_cols = [col for col in df_ts.columns if col not in ts_non_numeric]
+    for col in ts_numeric_cols:
+        df_ts[col] = pd.to_numeric(df_ts[col], errors='coerce')
+
+    wide_non_numeric = ['Country Name', 'Country Code', 'Region', 'Income Group']
+    wide_numeric_cols = [col for col in df_wide.columns if col not in wide_non_numeric]
+    for col in wide_numeric_cols:
+        df_wide[col] = pd.to_numeric(df_wide[col], errors='coerce')
 
     # Feature engineering for NLP & text analysis
     df_wide['Country_Summary_Text'] = (
@@ -57,21 +77,18 @@ region_select = pn.widgets.MultiSelect(
     value=list(df_wide['Region'].dropna().unique())[:3]
 )
 
-# 1. Dropdown Menu for filtering charts by Income Group
 income_select = pn.widgets.Select(
     name='Filter by Income Group',
     options=['All'] + list(df_wide['Income Group'].dropna().unique()),
     value='All'
 )
 
-# 2. Dropdown Menu for choosing indicator in charts
 map_metric_select = pn.widgets.Select(
     name='Map / Chart Indicator Variable',
     options=['Life_expectancy', 'GDP_per_capita', 'CO2_per_capita', 'Internet_users_pct', 'Infant_mortality'],
     value='Life_expectancy'
 )
 
-# 3. IntSlider Widget for controlling top N items in horizontal bar chart
 top_n_slider = pn.widgets.IntSlider(
     name='Top N Countries (Horizontal Bar)',
     start=5,
@@ -80,22 +97,27 @@ top_n_slider = pn.widgets.IntSlider(
     value=10
 )
 
-# 4. IntSlider Widget for Random Forest Estimators in ML model
-n_estimators_slider = pn.widgets.IntSlider(
-    name='ML Random Forest Estimators',
-    start=10,
-    end=200,
-    step=10,
-    value=100
+# Deep Learning Hyperparameters
+epochs_slider = pn.widgets.IntSlider(
+    name='Deep Learning Epochs',
+    start=50,
+    end=500,
+    step=50,
+    value=200
+)
+
+lr_select = pn.widgets.Select(
+    name='PyTorch Learning Rate',
+    options=[0.001, 0.005, 0.01, 0.05],
+    value=0.01
 )
 
 target_var_select = pn.widgets.Select(
-    name='ML Target Variable',
+    name='Target Variable (DL & ML)',
     options=['Life_expectancy', 'GDP_per_capita', 'CO2_per_capita', 'Infant_mortality'],
     value='Life_expectancy'
 )
 
-# Helper function to filter dataframe based on sidebar selections
 def filter_dataframe(regions, income):
     filtered = df_wide[df_wide['Region'].isin(regions)]
     if income != 'All':
@@ -103,10 +125,123 @@ def filter_dataframe(regions, income):
     return filtered
 
 # ---------------------------------------------------------
-# 3. COMPONENT GENERATORS (VISUALIZATIONS)
+# 3. VISUALIZATION GENERATORS (ALL 9 GRAPH TYPES)
 # ---------------------------------------------------------
 
-# 1. Table: Summary Statistics
+# 1. Pie Chart
+@pn.depends(region_select.param.value, income_select.param.value)
+def get_pie_chart(regions, income):
+    filtered = filter_dataframe(regions, income)
+    counts = filtered['Income Group'].value_counts().reset_index()
+    fig = px.pie(
+        counts, values='count', names='Income Group',
+        title="1. Income Group Distribution (Pie Chart)",
+        hole=0.4, color_discrete_sequence=px.colors.qualitative.Set3
+    )
+    fig.update_layout(margin=dict(l=20, r=20, t=40, b=20))
+    return fig
+
+# 2. Histogram
+@pn.depends(region_select.param.value, income_select.param.value, map_metric_select.param.value)
+def get_hist_chart(regions, income, metric):
+    filtered = filter_dataframe(regions, income)
+    fig = px.histogram(
+        filtered, x=metric, nbins=20,
+        title=f"2. Distribution of {metric} (Histogram)",
+        color_discrete_sequence=['#2ca02c'], template="plotly_white"
+    )
+    return fig
+
+# 3. Bar Chart
+@pn.depends(region_select.param.value, income_select.param.value)
+def get_bar_chart(regions, income):
+    filtered = filter_dataframe(regions, income)
+    avg_df = filtered.groupby('Region')['GDP_per_capita'].mean().reset_index()
+    fig = px.bar(
+        avg_df, x='Region', y='GDP_per_capita',
+        title="3. Mean GDP per Capita by Region (Bar Chart)",
+        color='Region', template="plotly_white"
+    )
+    return fig
+
+# 4. Barh Chart
+@pn.depends(region_select.param.value, income_select.param.value, top_n_slider.param.value, map_metric_select.param.value)
+def get_barh_chart(regions, income, top_n, metric):
+    filtered = filter_dataframe(regions, income).sort_values(metric, ascending=False).head(top_n)
+    fig = px.bar(
+        filtered, x=metric, y='Country Name', orientation='h',
+        title=f"4. Top {top_n} Countries by {metric} (Horizontal Bar)",
+        color=metric, color_continuous_scale='Blues'
+    )
+    fig.update_layout(yaxis={'categoryorder': 'total ascending'})
+    return fig
+
+# 5. Scatter Plot
+@pn.depends(region_select.param.value, income_select.param.value)
+def get_scatter_plot(regions, income):
+    filtered = filter_dataframe(regions, income)
+    fig = px.scatter(
+        filtered, x='GDP_per_capita', y='Life_expectancy',
+        size='Population', color='Region', hover_name='Country Name',
+        log_x=True, title="5. GDP per Capita vs. Life Expectancy (Scatter Plot)",
+        template="plotly_white"
+    )
+    return fig
+
+# 6. Heatmap
+@pn.depends(region_select.param.value, income_select.param.value)
+def get_heatmap(regions, income):
+    filtered = filter_dataframe(regions, income)
+    corr = filtered[numeric_cols[:8]].corr()
+    fig = px.imshow(
+        corr, text_auto=".2f",
+        title="6. Indicator Correlation Matrix (Heatmap)",
+        color_continuous_scale='RdBu_r'
+    )
+    return fig
+
+# 7. Map (Choropleth)
+@pn.depends(region_select.param.value, income_select.param.value, map_metric_select.param.value)
+def get_geo_map(regions, income, metric):
+    filtered = filter_dataframe(regions, income)
+    fig = px.choropleth(
+        filtered, locations="Country Code",
+        color=metric, hover_name="Country Name",
+        color_continuous_scale=px.colors.sequential.Plasma,
+        title=f"7. Global Distribution of {metric} (Map)"
+    )
+    fig.update_geos(showframe=False, showcoastlines=True, projection_type='natural earth')
+    return fig
+
+# 8. Line Chart (Time Series)
+@pn.depends(region_select.param.value, map_metric_select.param.value)
+def get_line_chart(regions, metric):
+    if metric not in df_ts.columns:
+        metric = 'GDP_per_capita' if 'GDP_per_capita' in df_ts.columns else df_ts.columns[2]
+    
+    ts_filtered = df_ts[df_ts['Region'].isin(regions)].copy() if 'Region' in df_ts.columns else df_ts.copy()
+    ts_filtered[metric] = pd.to_numeric(ts_filtered[metric], errors='coerce')
+    avg_ts = ts_filtered.groupby('Year')[metric].mean().reset_index()
+    
+    fig = px.line(
+        avg_ts, x='Year', y=metric,
+        title=f"8. Historical Trend of {metric} (Line Chart)",
+        markers=True, template="plotly_white"
+    )
+    return fig
+
+# 9. Boxplot
+@pn.depends(region_select.param.value, income_select.param.value)
+def get_boxplot(regions, income):
+    filtered = filter_dataframe(regions, income)
+    fig = px.box(
+        filtered, x='Income Group', y='CO2_per_capita',
+        color='Income Group', points="all",
+        title="9. CO2 Emissions per Capita by Income Group (Boxplot)"
+    )
+    return fig
+
+# Data Table
 @pn.depends(region_select.param.value, income_select.param.value)
 def get_table(regions, income):
     filtered = filter_dataframe(regions, income)
@@ -114,130 +249,84 @@ def get_table(regions, income):
     stats = stats.reset_index().rename(columns={'index': 'Indicator', '50%': 'median'})
     return pn.widgets.Tabulator(stats, pagination='remote', page_size=10, height=300)
 
-# 2. Pie Chart: Distribution by Income Group
-@pn.depends(region_select.param.value, income_select.param.value)
-def get_pie_chart(regions, income):
-    filtered = filter_dataframe(regions, income)
-    counts = filtered['Income Group'].value_counts().reset_index()
-    fig = px.pie(
-        counts, values='count', names='Income Group',
-        title="Income Group Distribution",
-        hole=0.4, color_discrete_sequence=px.colors.qualitative.Set3
-    )
-    fig.update_layout(margin=dict(l=20, r=20, t=40, b=20))
-    return fig
-
-# 3. Bar Chart: Average Indicator by Region
-@pn.depends(region_select.param.value, income_select.param.value)
-def get_bar_chart(regions, income):
-    filtered = filter_dataframe(regions, income)
-    avg_df = filtered.groupby('Region')['GDP_per_capita'].mean().reset_index()
-    fig = px.bar(
-        avg_df, x='Region', y='GDP_per_capita',
-        title="Mean GDP per Capita by Region ($)",
-        color='Region', template="plotly_white"
-    )
-    return fig
-
-# 4. Barh Chart: Top N Countries
-@pn.depends(region_select.param.value, income_select.param.value, top_n_slider.param.value, map_metric_select.param.value)
-def get_barh_chart(regions, income, top_n, metric):
-    filtered = filter_dataframe(regions, income).sort_values(metric, ascending=False).head(top_n)
-    fig = px.bar(
-        filtered, x=metric, y='Country Name', orientation='h',
-        title=f"Top {top_n} Countries by {metric}",
-        color=metric, color_continuous_scale='Blues'
-    )
-    fig.update_layout(yaxis={'categoryorder': 'total ascending'})
-    return fig
-
-# 5. Scatter Plot: GDP vs Life Expectancy
-@pn.depends(region_select.param.value, income_select.param.value)
-def get_scatter_plot(regions, income):
-    filtered = filter_dataframe(regions, income)
-    fig = px.scatter(
-        filtered, x='GDP_per_capita', y='Life_expectancy',
-        size='Population', color='Region', hover_name='Country Name',
-        log_x=True, title="GDP per Capita vs. Life Expectancy (Log Scale)",
-        template="plotly_white"
-    )
-    return fig
-
-# 6. Heatmap: Correlation Matrix
-@pn.depends(region_select.param.value, income_select.param.value)
-def get_heatmap(regions, income):
-    filtered = filter_dataframe(regions, income)
-    corr = filtered[numeric_cols[:8]].corr()
-    fig = px.imshow(
-        corr, text_auto=".2f",
-        title="Feature Correlation Matrix",
-        color_continuous_scale='RdBu_r'
-    )
-    return fig
-
-# 7. Boxplot: Distribution Across Income Groups
-@pn.depends(region_select.param.value, income_select.param.value)
-def get_boxplot(regions, income):
-    filtered = filter_dataframe(regions, income)
-    fig = px.box(
-        filtered, x='Income Group', y='CO2_per_capita',
-        color='Income Group', points="all",
-        title="CO2 Emissions per Capita by Income Level"
-    )
-    return fig
-
-# 8. Geospatial Map: World Map Indicator Visualizer
-@pn.depends(region_select.param.value, income_select.param.value, map_metric_select.param.value)
-def get_geo_map(regions, income, metric):
-    filtered = filter_dataframe(regions, income)
-    fig = px.choropleth(
-        filtered, locations="Country Code",
-        color=metric,
-        hover_name="Country Name",
-        color_continuous_scale=px.colors.sequential.Plasma,
-        title=f"Global {metric} Map"
-    )
-    fig.update_geos(showframe=False, showcoastlines=True, projection_type='natural earth')
-    return fig
-
 # ---------------------------------------------------------
-# 4. ADVANCED MACHINE LEARNING WORKFLOW
+# 4. DEEP LEARNING WORKFLOW (PYTORCH MLP NEURAL NETWORK)
 # ---------------------------------------------------------
-@pn.depends(target_var_select.param.value, n_estimators_slider.param.value)
-def run_ml_pipeline(target_col, n_estimators):
+class DeepRegressor(nn.Module):
+    def __init__(self, input_dim):
+        super(DeepRegressor, self).__init__()
+        self.net = nn.Sequential(
+            nn.Linear(input_dim, 64),
+            nn.ReLU(),
+            nn.Linear(64, 32),
+            nn.ReLU(),
+            nn.Linear(32, 1)
+        )
+
+    def forward(self, x):
+        return self.net(x)
+
+@pn.depends(target_var_select.param.value, epochs_slider.param.value, lr_select.param.value)
+def run_dl_pipeline(target_col, epochs, lr):
     ml_df = df_wide[numeric_cols].dropna()
-    X = ml_df.drop(columns=[target_col])
-    y = ml_df[target_col]
+    X = ml_df.drop(columns=[target_col]).values
+    y = ml_df[target_col].values.reshape(-1, 1)
 
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-    model = RandomForestRegressor(n_estimators=n_estimators, random_state=42)
-    model.fit(X_train, y_train)
 
-    preds = model.predict(X_test)
+    scaler_X = StandardScaler()
+    scaler_y = StandardScaler()
+
+    X_train_s = scaler_X.fit_transform(X_train)
+    X_test_s = scaler_X.transform(X_test)
+    y_train_s = scaler_y.fit_transform(y_train)
+    y_test_s = scaler_y.transform(y_test)
+
+    X_train_t = torch.tensor(X_train_s, dtype=torch.float32)
+    y_train_t = torch.tensor(y_train_s, dtype=torch.float32)
+    X_test_t = torch.tensor(X_test_s, dtype=torch.float32)
+
+    model = DeepRegressor(X_train_s.shape[1])
+    criterion = nn.MSELoss()
+    optimizer = optim.Adam(model.parameters(), lr=lr)
+
+    loss_history = []
+    for _ in range(epochs):
+        model.train()
+        optimizer.zero_grad()
+        predictions = model(X_train_t)
+        loss = criterion(predictions, y_train_t)
+        loss.backward()
+        optimizer.step()
+        loss_history.append(loss.item())
+
+    model.eval()
+    with torch.no_grad():
+        preds_scaled = model(X_test_t).numpy()
+    
+    preds = scaler_y.inverse_transform(preds_scaled)
     r2 = r2_score(y_test, preds)
     rmse = np.sqrt(mean_squared_error(y_test, preds))
 
-    importance = pd.DataFrame({'Feature': X.columns, 'Importance': model.feature_importances_})
-    importance = importance.sort_values('Importance', ascending=True)
-
-    fig = px.bar(
-        importance, x='Importance', y='Feature', orientation='h',
-        title=f"Feature Importances for Predicting {target_col} (n_estimators={n_estimators})",
-        color='Importance', color_continuous_scale='Viridis'
+    loss_df = pd.DataFrame({'Epoch': range(1, epochs + 1), 'MSE Loss': loss_history})
+    fig_loss = px.line(
+        loss_df, x='Epoch', y='MSE Loss',
+        title=f"PyTorch Neural Network Training Loss Curve ({epochs} Epochs, lr={lr})",
+        template="plotly_white"
     )
 
-    metrics_card = pn.Column(
-        pn.pane.Markdown(f"### ML Model Results: `{target_col}`"),
+    dl_card = pn.Column(
+        pn.pane.Markdown(f"### 🧠 PyTorch Deep Learning Model Results for Target: `{target_col}`"),
         pn.Row(
-            pn.indicators.Number(name='R² Score', value=r2, format='{value:.3f}'),
-            pn.indicators.Number(name='RMSE', value=rmse, format='{value:.3f}')
+            pn.indicators.Number(name='Deep Learning R² Score', value=r2, format='{value:.3f}'),
+            pn.indicators.Number(name='Deep Learning RMSE', value=rmse, format='{value:.3f}')
         ),
-        pn.pane.Plotly(fig)
+        pn.pane.Plotly(fig_loss)
     )
-    return metrics_card
+    return dl_card
 
 # ---------------------------------------------------------
-# 5. NLP & MODERN LLM APPLICATION WORKFLOW
+# 5. NLP WORKFLOW
 # ---------------------------------------------------------
 nlp_country_select = pn.widgets.Select(
     name='Select Country for Synthetic RAG / Prompt Context',
@@ -273,9 +362,7 @@ def run_nlp_llm_workflow(country_name, clicks):
         f"**Analysis:**\n"
         f"{country_name} is located in the **{country_row['Region']}** region with an income classification of "
         f"**{country_row['Income Group']}**. Key statistical metrics include a GDP per capita of **${country_row['GDP_per_capita']:,.2f}** "
-        f"and average life expectancy of **{country_row['Life_expectancy']} years**.\n\n"
-        f"*LLM Recommendation Engine Notice:* Based on context, target intervention should focus on "
-        f"{'infrastructure and industrialization' if country_row['GDP_per_capita'] < 5000 else 'sustainable growth and high-tech workforce deployment'}."
+        f"and average life expectancy of **{country_row['Life_expectancy']} years**."
     )
 
     return pn.Column(
@@ -286,7 +373,7 @@ def run_nlp_llm_workflow(country_name, clicks):
     )
 
 # ---------------------------------------------------------
-# 6. DYNAMIC PDF GENERATION ENGINE
+# 6. PDF GENERATION ENGINE WITH SIDE-BY-SIDE GRAPH + TEXT
 # ---------------------------------------------------------
 def generate_pdf_report():
     pdf_buffer = io.BytesIO()
@@ -317,7 +404,7 @@ def generate_pdf_report():
     )
 
     story = [
-        Paragraph("World Development Indicators Report", title_style),
+        Paragraph("World Development Indicators & Deep Learning Report", title_style),
         Paragraph(f"<b>Filter Context:</b> Regions: {', '.join(region_select.value)} | Income Group: {income_select.value}", body_style),
         Spacer(1, 15)
     ]
@@ -325,40 +412,50 @@ def generate_pdf_report():
     items_to_export = [
         (
             get_pie_chart(region_select.value, income_select.value),
-            "<b>Income Group Distribution</b><br/><br/>This pie chart displays the overall ratio of countries categorized by income levels within your active regional selection."
+            "<b>1. Pie Chart: Income Group Distribution</b><br/><br/>Displays the proportional representation of global income tiers within the current dataset filter."
+        ),
+        (
+            get_hist_chart(region_select.value, income_select.value, map_metric_select.value),
+            f"<b>2. Histogram: {map_metric_select.value} Distribution</b><br/><br/>Shows the frequency distribution and spread for the selected indicator across countries."
         ),
         (
             get_bar_chart(region_select.value, income_select.value),
-            "<b>Mean GDP per Capita by Region</b><br/><br/>This chart highlights economic disparities across regions, demonstrating average gross domestic product values."
+            "<b>3. Bar Chart: Mean GDP per Capita</b><br/><br/>Compares average national economic output across selected global regions."
         ),
         (
             get_barh_chart(region_select.value, income_select.value, top_n_slider.value, map_metric_select.value),
-            f"<b>Top {top_n_slider.value} Countries by {map_metric_select.value}</b><br/><br/>Horizontal ranking indicating top performing entities for the selected indicator variable."
+            f"<b>4. Horizontal Bar Chart: Top {top_n_slider.value} Ranking</b><br/><br/>Identifies leading countries ranked by the selected development metric."
         ),
         (
             get_scatter_plot(region_select.value, income_select.value),
-            "<b>GDP per Capita vs. Life Expectancy</b><br/><br/>A log-scale scatter analysis illustrating health outcomes plotted against economic metrics."
+            "<b>5. Scatter Plot: GDP vs. Life Expectancy</b><br/><br/>Visualizes relationship dynamics between economic capacity and health outcomes on a log scale."
         ),
         (
             get_heatmap(region_select.value, income_select.value),
-            "<b>Feature Correlation Matrix</b><br/><br/>Linear correlations between primary macro-economic and social indicators."
+            "<b>6. Heatmap: Indicator Correlations</b><br/><br/>Presents pairwise correlation coefficients between macro-economic and demographic metrics."
+        ),
+        (
+            get_geo_map(region_select.value, income_select.value, map_metric_select.value),
+            f"<b>7. Geospatial Map: Global {map_metric_select.value}</b><br/><br/>Choropleth mapping depicting geographical patterns for the selected variable."
+        ),
+        (
+            get_line_chart(region_select.value, map_metric_select.value),
+            f"<b>8. Line Chart: Historical Trend of {map_metric_select.value}</b><br/><br/>Displays aggregated longitudinal patterns over time."
         ),
         (
             get_boxplot(region_select.value, income_select.value),
-            "<b>CO2 Emissions per Capita</b><br/><br/>Distribution and outliers of carbon footprints grouped by global income tiers."
+            "<b>9. Boxplot: CO2 Emissions Dispersion</b><br/><br/>Illustrates median values, quartiles, and outlier data points for carbon footprints across income brackets."
         )
     ]
 
     table_data = []
 
-    for fig, text in items_to_export:
+    for fig, description in items_to_export:
         img_bytes = pio.to_image(fig, format='png', width=450, height=300, scale=2)
         img_buf = io.BytesIO(img_bytes)
         img = RLImage(img_buf, width=3.3 * inch, height=2.2 * inch)
+        text_p = Paragraph(description, body_style)
 
-        text_p = Paragraph(text, body_style)
-
-        # Place image on left, text on right side
         table_data.append([img, text_p])
 
     report_table = Table(table_data, colWidths=[3.5 * inch, 3.5 * inch])
@@ -376,17 +473,13 @@ def generate_pdf_report():
     pdf_buffer.seek(0)
     return pdf_buffer
 
-# PDF File Download Widget for Left Sidebar
 pdf_download_button = pn.widgets.FileDownload(
     callback=generate_pdf_report,
-    filename="WDI_Report.pdf",
+    filename="WDI_Comprehensive_Report.pdf",
     label="📄 Export Report to PDF",
     button_type="success",
     sizing_mode="stretch_width"
 )
-
-# Needed by reportlab export helper to render Plotly figures
-import plotly.io as pio
 
 # ---------------------------------------------------------
 # 7. PANEL DASHBOARD LAYOUT
@@ -401,23 +494,25 @@ sidebar = pn.Column(
     "### 📄 Export Options",
     pdf_download_button,
     pn.layout.Divider(),
-    "### 🤖 ML Parameters",
+    "### 🧠 Deep Learning Parameters",
     target_var_select,
-    n_estimators_slider,
+    epochs_slider,
+    lr_select,
     width=300
 )
 
 tabs = pn.Tabs(
-    ("📊 Statistical Analytics", pn.Column(
-        pn.Row(pn.pane.Plotly(get_pie_chart), pn.pane.Plotly(get_bar_chart)),
-        pn.Row(pn.pane.Plotly(get_barh_chart), pn.pane.Plotly(get_scatter_plot)),
-        pn.Row(pn.pane.Plotly(get_heatmap), pn.pane.Plotly(get_boxplot)),
-        pn.Row(pn.pane.Plotly(get_geo_map)),
+    ("📊 Visual Analytics (9 Plot Types)", pn.Column(
+        pn.Row(pn.pane.Plotly(get_pie_chart), pn.pane.Plotly(get_hist_chart)),
+        pn.Row(pn.pane.Plotly(get_bar_chart), pn.pane.Plotly(get_barh_chart)),
+        pn.Row(pn.pane.Plotly(get_scatter_plot), pn.pane.Plotly(get_heatmap)),
+        pn.Row(pn.pane.Plotly(get_geo_map), pn.pane.Plotly(get_line_chart)),
+        pn.Row(pn.pane.Plotly(get_boxplot)),
         pn.pane.Markdown("### 📋 Descriptive Statistics Data Table"),
         get_table
     )),
-    ("🌲 Machine Learning Predictive Engine", pn.Column(
-        run_ml_pipeline
+    ("🧠 PyTorch Deep Learning Model", pn.Column(
+        run_dl_pipeline
     )),
     ("💬 NLP & Modern LLM RAG Workflow", pn.Column(
         pn.pane.Markdown("### Modern RAG & Text Analytics Pipeline"),
@@ -430,15 +525,11 @@ tabs = pn.Tabs(
 )
 
 template = pn.template.FastListTemplate(
-    title="World Development Indicators - Data Science, ML & LLM Portal",
+    title="World Development Indicators - Data Science, PyTorch Deep Learning & LLM Portal",
     sidebar=[sidebar],
     main=[tabs],
     accent_base_color="#1f77b4",
     header_background="#1f77b4"
 )
-
-# ==================================================================
-# SERVE APPLICATION
-# ==================================================================
 
 template.servable()
