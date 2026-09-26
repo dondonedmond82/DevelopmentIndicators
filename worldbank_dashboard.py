@@ -31,6 +31,29 @@ from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, Tabl
 pn.extension('plotly', 'tabulator', sizing_mode="stretch_width")
 
 # ---------------------------------------------------------
+# 0. COLORBLIND-SAFE BLUE / RED / GREEN PALETTE
+#    Plain #0000FF / #FF0000 / #00FF00 are notoriously hard
+#    to tell apart for red-green color blindness (the most
+#    common type). These three hex values are the Okabe-Ito
+#    colorblind-safe versions of blue, red and green - they
+#    stay distinguishable under deuteranopia, protanopia and
+#    tritanopia.
+# ---------------------------------------------------------
+COLOR_BLUE = "#0072B2"    # colorblind-safe blue
+COLOR_RED = "#D55E00"     # colorblind-safe red (vermillion)
+COLOR_GREEN = "#009E73"   # colorblind-safe green (bluish-green)
+
+PALETTE = [COLOR_BLUE, COLOR_RED, COLOR_GREEN]           # for discrete/categorical series
+# Diverging scale for +/- values (correlation): red <-> white <-> blue.
+# Blue/red stays distinguishable for red-green color blindness, unlike
+# a red<->green diverging scale which would collapse for those users.
+DIVERGING_SCALE = [COLOR_RED, "#ffffff", COLOR_BLUE]
+# Sequential scale for single-direction intensity (rankings, map values):
+# light gray -> blue, since blue remains reliably perceivable across all
+# common types of color blindness.
+SEQUENTIAL_SCALE = ["#f0f0f0", COLOR_BLUE]
+
+# ---------------------------------------------------------
 # 1. DATA LOADING & PREPROCESSING (WITH TYPE FIXES)
 # ---------------------------------------------------------
 @pn.cache
@@ -126,6 +149,10 @@ def filter_dataframe(regions, income):
 
 # ---------------------------------------------------------
 # 3. VISUALIZATION GENERATORS (ALL 9 GRAPH TYPES)
+#    Discrete/categorical charts cycle through PALETTE
+#    (colorblind-safe blue/red/green). Diverging values
+#    (correlation) use DIVERGING_SCALE; single-direction
+#    intensity (rankings, map) uses SEQUENTIAL_SCALE.
 # ---------------------------------------------------------
 
 # 1. Pie Chart
@@ -136,8 +163,9 @@ def get_pie_chart(regions, income):
     fig = px.pie(
         counts, values='count', names='Income Group',
         title="1. Income Group Distribution (Pie Chart)",
-        hole=0.4, color_discrete_sequence=px.colors.qualitative.Set3
+        hole=0.4, color_discrete_sequence=PALETTE
     )
+    fig.update_traces(marker=dict(line=dict(color="#ffffff", width=1.5)))
     fig.update_layout(margin=dict(l=20, r=20, t=40, b=20))
     return fig
 
@@ -148,7 +176,7 @@ def get_hist_chart(regions, income, metric):
     fig = px.histogram(
         filtered, x=metric, nbins=20,
         title=f"2. Distribution of {metric} (Histogram)",
-        color_discrete_sequence=['#2ca02c'], template="plotly_white"
+        color_discrete_sequence=[COLOR_BLUE], template="plotly_white"
     )
     return fig
 
@@ -160,18 +188,18 @@ def get_bar_chart(regions, income):
     fig = px.bar(
         avg_df, x='Region', y='GDP_per_capita',
         title="3. Mean GDP per Capita by Region (Bar Chart)",
-        color='Region', template="plotly_white"
+        color='Region', color_discrete_sequence=PALETTE, template="plotly_white"
     )
     return fig
 
-# 4. Barh Chart
+# 4. Barh Chart (ranked -> blue sequential intensity)
 @pn.depends(region_select.param.value, income_select.param.value, top_n_slider.param.value, map_metric_select.param.value)
 def get_barh_chart(regions, income, top_n, metric):
     filtered = filter_dataframe(regions, income).sort_values(metric, ascending=False).head(top_n)
     fig = px.bar(
         filtered, x=metric, y='Country Name', orientation='h',
         title=f"4. Top {top_n} Countries by {metric} (Horizontal Bar)",
-        color=metric, color_continuous_scale='Blues'
+        color=metric, color_continuous_scale=SEQUENTIAL_SCALE
     )
     fig.update_layout(yaxis={'categoryorder': 'total ascending'})
     return fig
@@ -182,13 +210,14 @@ def get_scatter_plot(regions, income):
     filtered = filter_dataframe(regions, income)
     fig = px.scatter(
         filtered, x='GDP_per_capita', y='Life_expectancy',
-        size='Population', color='Region', hover_name='Country Name',
+        size='Population', color='Region', color_discrete_sequence=PALETTE,
+        hover_name='Country Name',
         log_x=True, title="5. GDP per Capita vs. Life Expectancy (Scatter Plot)",
         template="plotly_white"
     )
     return fig
 
-# 6. Heatmap
+# 6. Heatmap (correlation is +/- -> red/white/blue diverging scale)
 @pn.depends(region_select.param.value, income_select.param.value)
 def get_heatmap(regions, income):
     filtered = filter_dataframe(regions, income)
@@ -196,18 +225,18 @@ def get_heatmap(regions, income):
     fig = px.imshow(
         corr, text_auto=".2f",
         title="6. Indicator Correlation Matrix (Heatmap)",
-        color_continuous_scale='RdBu_r'
+        color_continuous_scale=DIVERGING_SCALE, zmin=-1, zmax=1
     )
     return fig
 
-# 7. Map (Choropleth)
+# 7. Map (Choropleth, single-direction intensity -> blue sequential)
 @pn.depends(region_select.param.value, income_select.param.value, map_metric_select.param.value)
 def get_geo_map(regions, income, metric):
     filtered = filter_dataframe(regions, income)
     fig = px.choropleth(
         filtered, locations="Country Code",
         color=metric, hover_name="Country Name",
-        color_continuous_scale=px.colors.sequential.Plasma,
+        color_continuous_scale=SEQUENTIAL_SCALE,
         title=f"7. Global Distribution of {metric} (Map)"
     )
     fig.update_geos(showframe=False, showcoastlines=True, projection_type='natural earth')
@@ -218,15 +247,15 @@ def get_geo_map(regions, income, metric):
 def get_line_chart(regions, metric):
     if metric not in df_ts.columns:
         metric = 'GDP_per_capita' if 'GDP_per_capita' in df_ts.columns else df_ts.columns[2]
-    
+
     ts_filtered = df_ts[df_ts['Region'].isin(regions)].copy() if 'Region' in df_ts.columns else df_ts.copy()
     ts_filtered[metric] = pd.to_numeric(ts_filtered[metric], errors='coerce')
     avg_ts = ts_filtered.groupby('Year')[metric].mean().reset_index()
-    
+
     fig = px.line(
         avg_ts, x='Year', y=metric,
         title=f"8. Historical Trend of {metric} (Line Chart)",
-        markers=True, template="plotly_white"
+        markers=True, color_discrete_sequence=[COLOR_BLUE], template="plotly_white"
     )
     return fig
 
@@ -236,7 +265,7 @@ def get_boxplot(regions, income):
     filtered = filter_dataframe(regions, income)
     fig = px.box(
         filtered, x='Income Group', y='CO2_per_capita',
-        color='Income Group', points="all",
+        color='Income Group', color_discrete_sequence=PALETTE, points="all",
         title="9. CO2 Emissions per Capita by Income Group (Boxplot)"
     )
     return fig
@@ -303,7 +332,7 @@ def run_dl_pipeline(target_col, epochs, lr):
     model.eval()
     with torch.no_grad():
         preds_scaled = model(X_test_t).numpy()
-    
+
     preds = scaler_y.inverse_transform(preds_scaled)
     r2 = r2_score(y_test, preds)
     rmse = np.sqrt(mean_squared_error(y_test, preds))
@@ -312,14 +341,16 @@ def run_dl_pipeline(target_col, epochs, lr):
     fig_loss = px.line(
         loss_df, x='Epoch', y='MSE Loss',
         title=f"PyTorch Neural Network Training Loss Curve ({epochs} Epochs, lr={lr})",
-        template="plotly_white"
+        color_discrete_sequence=[COLOR_BLUE], template="plotly_white"
     )
 
     dl_card = pn.Column(
         pn.pane.Markdown(f"### 🧠 PyTorch Deep Learning Model Results for Target: `{target_col}`"),
         pn.Row(
-            pn.indicators.Number(name='Deep Learning R² Score', value=r2, format='{value:.3f}'),
-            pn.indicators.Number(name='Deep Learning RMSE', value=rmse, format='{value:.3f}')
+            pn.indicators.Number(name='Deep Learning R² Score', value=r2, format='{value:.3f}',
+                                  colors=[(1, COLOR_GREEN)]),
+            pn.indicators.Number(name='Deep Learning RMSE', value=rmse, format='{value:.3f}',
+                                  colors=[(1, COLOR_RED)])
         ),
         pn.pane.Plotly(fig_loss)
     )
@@ -339,6 +370,7 @@ prompt_input = pn.widgets.TextAreaInput(
     height=80
 )
 
+# button_type='primary' renders in Panel's blue, matching COLOR_BLUE
 nlp_run_btn = pn.widgets.Button(name='Run LLM / RAG Pipeline', button_type='primary')
 
 @pn.depends(nlp_country_select.param.value, nlp_run_btn.param.clicks)
@@ -365,9 +397,10 @@ def run_nlp_llm_workflow(country_name, clicks):
         f"and average life expectancy of **{country_row['Life_expectancy']} years**."
     )
 
+    # alert_type='primary' keeps the callout in the blue family
     return pn.Column(
         pn.pane.Markdown("#### 🔍 1. Retrieved Document Context (Vector DB / RAG)"),
-        pn.pane.Alert(retrieved_context, alert_type='info'),
+        pn.pane.Alert(retrieved_context, alert_type='primary'),
         pn.pane.Markdown("#### 🤖 2. Generated Response (LLM Engine)"),
         pn.pane.Markdown(simulated_llm_response)
     )
@@ -392,7 +425,7 @@ def generate_pdf_report():
         parent=styles['Heading1'],
         fontSize=18,
         leading=22,
-        textColor=colors.HexColor('#1f77b4'),
+        textColor=colors.HexColor(COLOR_BLUE),
         spaceAfter=15
     )
     body_style = ParagraphStyle(
@@ -400,7 +433,7 @@ def generate_pdf_report():
         parent=styles['Normal'],
         fontSize=9,
         leading=13,
-        textColor=colors.HexColor('#2c3e50')
+        textColor=colors.HexColor("#2c2c2c")  # neutral dark gray for body readability
     )
 
     story = [
@@ -465,7 +498,7 @@ def generate_pdf_report():
         ('RIGHTPADDING', (0, 0), (-1, -1), 6),
         ('TOPPADDING', (0, 0), (-1, -1), 8),
         ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
-        ('LINEBELOW', (0, 0), (-1, -1), 0.5, colors.HexColor('#e0e0e0')),
+        ('LINEBELOW', (0, 0), (-1, -1), 0.5, colors.HexColor("#d9d9d9")),
     ]))
 
     story.append(report_table)
@@ -473,11 +506,12 @@ def generate_pdf_report():
     pdf_buffer.seek(0)
     return pdf_buffer
 
+# button_type='primary' keeps this in the blue family
 pdf_download_button = pn.widgets.FileDownload(
     callback=generate_pdf_report,
     filename="WDI_Comprehensive_Report.pdf",
     label="📄 Export Report to PDF",
-    button_type="success",
+    button_type="primary",
     sizing_mode="stretch_width"
 )
 
@@ -524,12 +558,13 @@ tabs = pn.Tabs(
     ))
 )
 
+# accent_base_color and header_background set to the colorblind-safe blue
 template = pn.template.FastListTemplate(
     title="World Development Indicators - Data Science, PyTorch Deep Learning & LLM Portal",
     sidebar=[sidebar],
     main=[tabs],
-    accent_base_color="#1f77b4",
-    header_background="#1f77b4"
+    accent_base_color=COLOR_BLUE,
+    header_background=COLOR_BLUE
 )
 
 template.servable()
