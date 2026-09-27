@@ -31,27 +31,24 @@ from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, Tabl
 pn.extension('plotly', 'tabulator', sizing_mode="stretch_width")
 
 # ---------------------------------------------------------
-# 0. COLORBLIND-SAFE BLUE / RED / GREEN PALETTE
-#    Plain #0000FF / #FF0000 / #00FF00 are notoriously hard
-#    to tell apart for red-green color blindness (the most
-#    common type). These three hex values are the Okabe-Ito
-#    colorblind-safe versions of blue, red and green - they
-#    stay distinguishable under deuteranopia, protanopia and
-#    tritanopia.
+# 0. WHITE / BLUE PALETTE
+#    Monochrome-blue theme: a dark navy accent blue plus
+#    light and mid blue shades for categorical series, a
+#    light-blue<->white<->dark-blue diverging scale for +/-
+#    values (correlation), and a white -> light blue -> dark
+#    blue sequential scale for density/intensity data
+#    (rankings, map values, histograms).
 # ---------------------------------------------------------
-COLOR_BLUE = "#0072B2"    # colorblind-safe blue
-COLOR_RED = "#D55E00"     # colorblind-safe red (vermillion)
-COLOR_GREEN = "#009E73"   # colorblind-safe green (bluish-green)
+COLOR_BLUE = "#08306B"    # dark navy blue (primary / accent)
+COLOR_RED = "#4292C6"     # medium blue (secondary)
+COLOR_GREEN = "#9ECAE1"   # light blue (tertiary)
 
 PALETTE = [COLOR_BLUE, COLOR_RED, COLOR_GREEN]           # for discrete/categorical series
-# Diverging scale for +/- values (correlation): red <-> white <-> blue.
-# Blue/red stays distinguishable for red-green color blindness, unlike
-# a red<->green diverging scale which would collapse for those users.
-DIVERGING_SCALE = [COLOR_RED, "#ffffff", COLOR_BLUE]
-# Sequential scale for single-direction intensity (rankings, map values):
-# light gray -> blue, since blue remains reliably perceivable across all
-# common types of color blindness.
-SEQUENTIAL_SCALE = ["#f0f0f0", COLOR_BLUE]
+# Diverging scale for +/- values (correlation): light blue <-> white <-> dark blue.
+DIVERGING_SCALE = [COLOR_GREEN, "#ffffff", COLOR_BLUE]
+# Sequential scale for single-direction intensity/density (rankings, map values):
+# white -> light blue -> dark blue gradient.
+SEQUENTIAL_SCALE = ["#ffffff", COLOR_GREEN, COLOR_BLUE]
 
 # ---------------------------------------------------------
 # 1. DATA LOADING & PREPROCESSING (WITH TYPE FIXES)
@@ -150,9 +147,10 @@ def filter_dataframe(regions, income):
 # ---------------------------------------------------------
 # 3. VISUALIZATION GENERATORS (ALL 9 GRAPH TYPES)
 #    Discrete/categorical charts cycle through PALETTE
-#    (colorblind-safe blue/red/green). Diverging values
+#    (dark blue/medium blue/light blue). Diverging values
 #    (correlation) use DIVERGING_SCALE; single-direction
-#    intensity (rankings, map) uses SEQUENTIAL_SCALE.
+#    intensity/density (rankings, map) uses SEQUENTIAL_SCALE
+#    (white -> light blue -> dark blue).
 # ---------------------------------------------------------
 
 # 1. Pie Chart
@@ -217,7 +215,7 @@ def get_scatter_plot(regions, income):
     )
     return fig
 
-# 6. Heatmap (correlation is +/- -> red/white/blue diverging scale)
+# 6. Heatmap (correlation is +/- -> light blue/white/dark blue diverging scale)
 @pn.depends(region_select.param.value, income_select.param.value)
 def get_heatmap(regions, income):
     filtered = filter_dataframe(regions, income)
@@ -229,7 +227,7 @@ def get_heatmap(regions, income):
     )
     return fig
 
-# 7. Map (Choropleth, single-direction intensity -> blue sequential)
+# 7. Map (Choropleth, single-direction intensity/density -> blue sequential)
 @pn.depends(region_select.param.value, income_select.param.value, map_metric_select.param.value)
 def get_geo_map(regions, income, metric):
     filtered = filter_dataframe(regions, income)
@@ -348,7 +346,7 @@ def run_dl_pipeline(target_col, epochs, lr):
         pn.pane.Markdown(f"### 🧠 PyTorch Deep Learning Model Results for Target: `{target_col}`"),
         pn.Row(
             pn.indicators.Number(name='Deep Learning R² Score', value=r2, format='{value:.3f}',
-                                  colors=[(1, COLOR_GREEN)]),
+                                  colors=[(1, COLOR_BLUE)]),
             pn.indicators.Number(name='Deep Learning RMSE', value=rmse, format='{value:.3f}',
                                   colors=[(1, COLOR_RED)])
         ),
@@ -370,7 +368,7 @@ prompt_input = pn.widgets.TextAreaInput(
     height=80
 )
 
-# button_type='primary' renders in Panel's blue, matching COLOR_BLUE
+# button_type='primary' renders in Panel's styling, matching the black accent
 nlp_run_btn = pn.widgets.Button(name='Run LLM / RAG Pipeline', button_type='primary')
 
 @pn.depends(nlp_country_select.param.value, nlp_run_btn.param.clicks)
@@ -397,7 +395,7 @@ def run_nlp_llm_workflow(country_name, clicks):
         f"and average life expectancy of **{country_row['Life_expectancy']} years**."
     )
 
-    # alert_type='primary' keeps the callout in the blue family
+    # alert_type='primary' keeps the callout in the neutral family
     return pn.Column(
         pn.pane.Markdown("#### 🔍 1. Retrieved Document Context (Vector DB / RAG)"),
         pn.pane.Alert(retrieved_context, alert_type='primary'),
@@ -506,7 +504,7 @@ def generate_pdf_report():
     pdf_buffer.seek(0)
     return pdf_buffer
 
-# button_type='primary' keeps this in the blue family
+# button_type='primary' keeps this in the neutral/black family
 pdf_download_button = pn.widgets.FileDownload(
     callback=generate_pdf_report,
     filename="WDI_Comprehensive_Report.pdf",
@@ -558,7 +556,7 @@ tabs = pn.Tabs(
     ))
 )
 
-# accent_base_color and header_background set to the colorblind-safe blue
+# accent_base_color and header_background set to the dark blue accent
 template = pn.template.FastListTemplate(
     title="World Development Indicators - Data Science, PyTorch Deep Learning & LLM Portal",
     sidebar=[sidebar],
