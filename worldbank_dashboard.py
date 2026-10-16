@@ -31,28 +31,25 @@ from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, Tabl
 pn.extension('plotly', 'tabulator', sizing_mode="stretch_width")
 
 # ---------------------------------------------------------
-# 0. RED / GREEN PALETTE (WORLD BANK STYLE)
-#    Green reads as "positive/good", red as "negative/bad" —
-#    the convention used across World Bank development
-#    dashboards. Categorical charts cycle through a dark
-#    green, a red, and a lighter green. The diverging scale
-#    (correlation) runs red <-> white <-> green, so negative
-#    correlations read red and positive ones read green. The
-#    sequential "density" scale (rankings, map intensity)
-#    runs white -> light green -> dark green, since those
-#    values are a single-direction magnitude rather than a
-#    +/- comparison.
+# 0. BLUE / RED PALETTE
+#    Two hues only: blue (primary) and red (secondary).
+#    - Categorical charts cycle blue -> red, then lighter tints
+#      of each hue if more than 2 categories are present.
+#    - Diverging scale (correlation): red <-> white <-> blue.
+#    - Sequential scale (rankings, map intensity): white -> light
+#      blue -> dark blue.
 # ---------------------------------------------------------
-COLOR_BLUE = "#1B7837"    # dark green (primary / accent, "positive")
-COLOR_RED = "#B2182B"     # red (secondary, "negative")
-COLOR_GREEN = "#66BD63"   # light green (tertiary)
+COLOR_BLUE = "#1F4E9E"        # blue (primary / accent)
+COLOR_RED = "#C0392B"         # red (secondary)
+COLOR_BLUE_LIGHT = "#8FB0E3"  # light tint of blue
+COLOR_RED_LIGHT = "#E8A29A"   # light tint of red
 
-PALETTE = [COLOR_BLUE, COLOR_RED, COLOR_GREEN]           # for discrete/categorical series
-# Diverging scale for +/- values (correlation): red <-> white <-> green.
+# Discrete/categorical series
+PALETTE = [COLOR_BLUE, COLOR_RED, COLOR_BLUE_LIGHT, COLOR_RED_LIGHT]
+# Diverging scale for +/- values (correlation): red <-> white <-> blue
 DIVERGING_SCALE = [COLOR_RED, "#ffffff", COLOR_BLUE]
-# Sequential "density" scale for single-direction intensity/density (rankings, map values):
-# white -> light green -> dark green gradient.
-SEQUENTIAL_SCALE = ["#ffffff", COLOR_GREEN, COLOR_BLUE]
+# Sequential scale for single-direction intensity (rankings, map values)
+SEQUENTIAL_SCALE = ["#ffffff", COLOR_BLUE_LIGHT, COLOR_BLUE]
 
 # ---------------------------------------------------------
 # 1. DATA LOADING & PREPROCESSING (WITH TYPE FIXES)
@@ -151,10 +148,10 @@ def filter_dataframe(regions, income):
 # ---------------------------------------------------------
 # 3. VISUALIZATION GENERATORS (ALL 9 GRAPH TYPES)
 #    Discrete/categorical charts cycle through PALETTE
-#    (black/medium gray/light gray). Diverging values
-#    (correlation) use DIVERGING_SCALE; single-direction
-#    intensity/density (rankings, map) uses SEQUENTIAL_SCALE
-#    (white -> light gray -> black).
+#    (blue / red / light blue / light red). Diverging values
+#    (correlation) use DIVERGING_SCALE (red <-> white <-> blue);
+#    single-direction intensity (rankings, map) uses
+#    SEQUENTIAL_SCALE (white -> light blue -> dark blue).
 # ---------------------------------------------------------
 
 # 1. Pie Chart
@@ -194,7 +191,7 @@ def get_bar_chart(regions, income):
     )
     return fig
 
-# 4. Barh Chart (ranked -> grayscale density)
+# 4. Barh Chart (ranked -> sequential blue scale)
 @pn.depends(region_select.param.value, income_select.param.value, top_n_slider.param.value, map_metric_select.param.value)
 def get_barh_chart(regions, income, top_n, metric):
     filtered = filter_dataframe(regions, income).sort_values(metric, ascending=False).head(top_n)
@@ -219,7 +216,7 @@ def get_scatter_plot(regions, income):
     )
     return fig
 
-# 6. Heatmap (correlation is +/- -> light gray/white/black diverging scale)
+# 6. Heatmap (correlation is +/- -> red/white/blue diverging scale)
 @pn.depends(region_select.param.value, income_select.param.value)
 def get_heatmap(regions, income):
     filtered = filter_dataframe(regions, income)
@@ -231,7 +228,7 @@ def get_heatmap(regions, income):
     )
     return fig
 
-# 7. Map (Choropleth, single-direction intensity/density -> grayscale sequential)
+# 7. Map (Choropleth, single-direction intensity -> sequential blue scale)
 @pn.depends(region_select.param.value, income_select.param.value, map_metric_select.param.value)
 def get_geo_map(regions, income, metric):
     filtered = filter_dataframe(regions, income)
@@ -372,7 +369,7 @@ prompt_input = pn.widgets.TextAreaInput(
     height=80
 )
 
-# button_type='primary' renders in Panel's styling, matching the black accent
+# button_type='primary' follows the template accent color (blue)
 nlp_run_btn = pn.widgets.Button(name='Run LLM / RAG Pipeline', button_type='primary')
 
 @pn.depends(nlp_country_select.param.value, nlp_run_btn.param.clicks)
@@ -399,7 +396,7 @@ def run_nlp_llm_workflow(country_name, clicks):
         f"and average life expectancy of **{country_row['Life_expectancy']} years**."
     )
 
-    # alert_type='primary' keeps the callout in the neutral family
+    # alert_type='primary' renders the callout in the blue accent family
     return pn.Column(
         pn.pane.Markdown("#### 🔍 1. Retrieved Document Context (Vector DB / RAG)"),
         pn.pane.Alert(retrieved_context, alert_type='primary'),
@@ -508,7 +505,7 @@ def generate_pdf_report():
     pdf_buffer.seek(0)
     return pdf_buffer
 
-# button_type='primary' keeps this in the neutral/black family
+# button_type='primary' follows the template accent color (blue)
 pdf_download_button = pn.widgets.FileDownload(
     callback=generate_pdf_report,
     filename="WDI_Comprehensive_Report.pdf",
@@ -560,7 +557,7 @@ tabs = pn.Tabs(
     ))
 )
 
-# accent_base_color and header_background set to black
+# accent_base_color and header_background use the primary blue
 template = pn.template.FastListTemplate(
     title="World Development Indicators - Data Science, PyTorch Deep Learning & LLM Portal",
     sidebar=[sidebar],
